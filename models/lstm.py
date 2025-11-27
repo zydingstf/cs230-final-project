@@ -30,11 +30,12 @@ import torch
 import torch.nn as nn
 from torch.nn.utils.rnn import pad_sequence
 
-from torchtext.data.utils import get_tokenizer
-from torchtext.vocab import build_vocab_from_iterator
-
 from sklearn.model_selection import train_test_split
 from src.evaluation_metrics import topk_accuracy
+
+# new: for regex tokenizer + vocab
+import re
+from collections import Counter
 
 # ------------------------------------------------------------------
 # Data loading
@@ -43,6 +44,9 @@ logger.info("Loading data from data/cleaned.csv")
 df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", "cleaned.csv"))
 df = df[["text", "label_id"]]
 
+# just in case there are NaNs in text
+df["text"] = df["text"].fillna("")
+
 train_df, val_df = train_test_split(
     df, test_size=0.2, random_state=42, stratify=df["label_id"]
 )
@@ -50,56 +54,91 @@ train_df, val_df = train_test_split(
 logger.info(f"Train size: {len(train_df)}, Val size: {len(val_df)}")
 
 # ------------------------------------------------------------------
-# Tokenizer & vocab
+# Small regex tokenizer & vocab
 # ------------------------------------------------------------------
-tokenizer = get_tokenizer("basic_english")
 
-def yield_tokens(df_):
-    for text in df_["text"]:
-        yield tokenizer(text)
+# e.g. "it's great!" -> ["it's", "great", "!"]
+TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9']+|[.,!?;]")
+
+def basic_tokenizer(text: str):
+    text = str(text).lower()
+    return TOKEN_PATTERN.findall(text)
+
+def build_vocab_from_iterator(texts, min_freq=2, specials=None):
+    if specials is None:
+        specials = ["<PAD>", "<UNK>"]
+
+    counter = Counter()
+    for t in texts:
+        tokens = basic_tokenizer(t)
+        counter.update(tokens)
+
+    stoi = {}
+    # add special tokens first
+    for sp in specials:
+        if sp not in stoi:
+            stoi[sp] = len(stoi)
+
+    # add normal tokens above frequency threshold
+    for tok, freq in counter.items():
+        if freq >= min_freq and tok not in stoi:
+            stoi[tok] = len(stoi)
+
+    itos = {i: s for s, i in stoi.items()}
+    pad_idx = stoi["<PAD>"]
+    unk_idx = stoi["<UNK>"]
+
+    def encode(tokens):
+        return [stoi.get(tok, unk_idx) for tok in tokens]
+
+    vocab = {
+        "stoi": stoi,
+        "itos": itos,
+        "pad_idx": pad_idx,
+        "unk_idx": unk_idx,
+        "encode": encode,
+    }
+    return vocab
 
 logger.info("Building vocabulary...")
 vocab = build_vocab_from_iterator(
-    yield_tokens(train_df),
+    train_df["text"].tolist(),
     min_freq=2,
     specials=["<PAD>", "<UNK>"],
 )
-vocab.set_default_index(vocab["<UNK>"])
 
-pad_idx = vocab["<PAD>"]
-vocab_size = len(vocab)
+pad_idx = vocab["pad_idx"]
+vocab_size = len(vocab["stoi"])
 num_classes = df["label_id"].nunique()
 logger.info(f"Vocab size: {vocab_size}, Num classes: {num_classes}")
 
-def text_to_indices(text, tokenizer, vocab):
-    # handle NaNs just in case
+def text_to_indices(text, vocab):
+    # handle NaNs / weird inputs just in case
     if pd.isna(text):
         text = ""
+    tokens = basic_tokenizer(text)
 
-    tokens = tokenizer(text)
-
-    # if token list is empty, fall back to a single <UNK> token
+    # ensure at least one token so LSTM never sees length 0
     if len(tokens) == 0:
         tokens = ["<UNK>"]
 
-    ids = vocab(tokens)
+    ids = vocab["encode"](tokens)
     return torch.tensor(ids, dtype=torch.long)
 
 # ------------------------------------------------------------------
 # Dataset & DataLoaders
 # ------------------------------------------------------------------
 class TextDataset(Dataset):
-    def __init__(self, df_, tokenizer, vocab):
+    def __init__(self, df_, vocab):
         self.texts = df_["text"].tolist()
         self.labels = df_["label_id"].tolist()
-        self.tokenizer = tokenizer
         self.vocab = vocab
 
     def __len__(self):
         return len(self.texts)
 
     def __getitem__(self, idx):
-        x = text_to_indices(self.texts[idx], self.tokenizer, self.vocab)
+        x = text_to_indices(self.texts[idx], self.vocab)
         y = torch.tensor(self.labels[idx], dtype=torch.long)
         return x, y
 
@@ -115,8 +154,8 @@ def collate_fn(batch):
     labels = torch.stack(labels)
     return padded_seqs, lengths, labels
 
-train_dataset = TextDataset(train_df, tokenizer, vocab)
-val_dataset   = TextDataset(val_df, tokenizer, vocab)
+train_dataset = TextDataset(train_df, vocab)
+val_dataset   = TextDataset(val_df, vocab)
 
 train_loader = DataLoader(
     train_dataset, batch_size=32, shuffle=True, collate_fn=collate_fn
