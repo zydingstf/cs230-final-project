@@ -2,13 +2,13 @@ import os
 import sys
 import time
 import logging
+import math
 
-# Progress bar
 from tqdm.auto import tqdm
 
-# Path of this file: project_root/models/lstm.py
+# Path of this file: project_root/models/transformer.py
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))  # go up to project_root
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -32,8 +32,6 @@ from torch.nn.utils.rnn import pad_sequence
 
 from sklearn.model_selection import train_test_split
 from src.evaluation_metrics import topk_accuracy
-
-# for regex tokenizer + vocab
 import re
 from collections import Counter
 
@@ -43,8 +41,6 @@ from collections import Counter
 logger.info("Loading data from data/cleaned.csv")
 df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", "cleaned.csv"))
 df = df[["text", "label_id"]]
-
-# just in case there are NaNs in text
 df["text"] = df["text"].fillna("")
 
 train_df, val_df = train_test_split(
@@ -54,10 +50,8 @@ train_df, val_df = train_test_split(
 logger.info(f"Train size: {len(train_df)}, Val size: {len(val_df)}")
 
 # ------------------------------------------------------------------
-# Small regex tokenizer & vocab
+# Tokenizer & vocab
 # ------------------------------------------------------------------
-
-# e.g. "it's great!" -> ["it's", "great", "!"]
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9']+|[.,!?;]")
 
 def basic_tokenizer(text: str):
@@ -74,12 +68,10 @@ def build_vocab_from_iterator(texts, min_freq=2, specials=None):
         counter.update(tokens)
 
     stoi = {}
-    # add special tokens first
     for sp in specials:
         if sp not in stoi:
             stoi[sp] = len(stoi)
 
-    # add normal tokens above frequency threshold
     for tok, freq in counter.items():
         if freq >= min_freq and tok not in stoi:
             stoi[tok] = len(stoi)
@@ -113,20 +105,16 @@ num_classes = df["label_id"].nunique()
 logger.info(f"Vocab size: {vocab_size}, Num classes: {num_classes}")
 
 def text_to_indices(text, vocab):
-    # handle NaNs / weird inputs just in case
     if pd.isna(text):
         text = ""
     tokens = basic_tokenizer(text)
-
-    # ensure at least one token so LSTM never sees length 0
     if len(tokens) == 0:
         tokens = ["<UNK>"]
-
     ids = vocab["encode"](tokens)
     return torch.tensor(ids, dtype=torch.long)
 
 # ------------------------------------------------------------------
-# Dataset & DataLoaders
+# Dataset & loaders
 # ------------------------------------------------------------------
 class TextDataset(Dataset):
     def __init__(self, df_, vocab):
@@ -165,73 +153,117 @@ val_loader = DataLoader(
 )
 
 # ------------------------------------------------------------------
-# Model
+# Transformer model
 # ------------------------------------------------------------------
-class LSTMClassifier(nn.Module):
+class PositionalEncoding(nn.Module):
+    """
+    Standard sinusoidal positional encoding.
+    """
+    def __init__(self, d_model: int, max_len: int = 5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0) 
+        self.register_buffer("pe", pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [batch, seq_len, d_model]
+        """
+        seq_len = x.size(1)
+        x = x + self.pe[:, :seq_len, :]
+        return x
+
+class TransformerClassifier(nn.Module):
     def __init__(
         self,
-        vocab_size,
-        embed_dim,
-        hidden_dim,
-        num_classes,
-        num_layers=1,
-        bidirectional=True,
-        dropout=0.5,
-        pad_idx=0,
+        vocab_size: int,
+        embed_dim: int,
+        num_heads: int,
+        num_layers: int,
+        dim_feedforward: int,
+        num_classes: int,
+        pad_idx: int,
+        dropout: float = 0.1,
+        max_seq_len: int = 512,
     ):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=pad_idx)
-        self.lstm = nn.LSTM(
-            input_size=embed_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=bidirectional,
+        self.pad_idx = pad_idx
+
+        self.embedding = nn.Embedding(
+            vocab_size, embed_dim, padding_idx=pad_idx
         )
+        self.pos_encoder = PositionalEncoding(embed_dim, max_len=max_seq_len)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            batch_first=True,  # [batch, seq_len, dim]
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_layers
+        )
+
         self.dropout = nn.Dropout(dropout)
-        self.bidirectional = bidirectional
-        self.fc = nn.Linear(hidden_dim * (2 if bidirectional else 1), num_classes)
+        self.fc = nn.Linear(embed_dim, num_classes)
 
-    def forward(self, x, lengths):
-        embedded = self.embedding(x)
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
+        """
+        x: [batch, seq_len]
+        lengths: [batch]
+        """
+        pad_mask = (x == self.pad_idx)
 
-        packed = nn.utils.rnn.pack_padded_sequence(
-            embedded, lengths.cpu(), batch_first=True, enforce_sorted=False
+        emb = self.embedding(x)
+        emb = self.pos_encoder(emb)
+
+        encoded = self.transformer_encoder(
+            emb, src_key_padding_mask=pad_mask
         )
-        _, (h_n, _) = self.lstm(packed)
 
-        if self.bidirectional:
-            h_forward = h_n[-2, :, :]
-            h_backward = h_n[-1, :, :]
-            h = torch.cat((h_forward, h_backward), dim=1)
-        else:
-            h = h_n[-1, :, :]
+        lengths = lengths.clamp(min=1).unsqueeze(1)
 
-        h = self.dropout(h)
-        logits = self.fc(h)
+        mask = (~pad_mask).unsqueeze(-1)
+        encoded_masked = encoded * mask
+        summed = encoded_masked.sum(dim=1)
+        pooled = summed / lengths
+
+        pooled = self.dropout(pooled)
+        logits = self.fc(pooled)
         return logits
 
+# ------------------------------------------------------------------
+# Training setup
+# ------------------------------------------------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
 
-model = LSTMClassifier(
+model = TransformerClassifier(
     vocab_size=vocab_size,
-    embed_dim=256,
-    hidden_dim=256,
-    num_classes=num_classes,
+    embed_dim=128,
+    num_heads=4,
     num_layers=2,
-    bidirectional=True,
-    dropout=0.5,
+    dim_feedforward=256,
+    num_classes=num_classes,
     pad_idx=pad_idx,
+    dropout=0.1,
+    max_seq_len=256,
 ).to(device)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 # ------------------------------------------------------------------
-# Training loop with progress + timing
+# Training loop (unchanged)
 # ------------------------------------------------------------------
-num_epochs = 10
+num_epochs = 20
 logger.info(f"Starting training for {num_epochs} epochs")
 
 overall_start = time.time()
@@ -246,7 +278,6 @@ for epoch in range(num_epochs):
     train_scores = []
     train_labels = []
 
-    # tqdm progress bar over training batches
     for batch_x, batch_lengths, batch_y in tqdm(
         train_loader, desc=f"Epoch {epoch+1}/{num_epochs} [train]", leave=False
     ):
