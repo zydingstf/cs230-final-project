@@ -37,9 +37,6 @@ from src.evaluation_metrics import topk_accuracy
 import re
 from collections import Counter
 
-# ------------------------------------------------------------------
-# Data loading
-# ------------------------------------------------------------------
 logger.info("Loading data from data/cleaned.csv")
 df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", "cleaned.csv"))
 df = df[["text", "label_id"]]
@@ -53,11 +50,6 @@ train_df, val_df = train_test_split(
 
 logger.info(f"Train size: {len(train_df)}, Val size: {len(val_df)}")
 
-# ------------------------------------------------------------------
-# Small regex tokenizer & vocab
-# ------------------------------------------------------------------
-
-# e.g. "it's great!" -> ["it's", "great", "!"]
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9']+|[.,!?;]")
 
 def basic_tokenizer(text: str):
@@ -74,12 +66,10 @@ def build_vocab_from_iterator(texts, min_freq=2, specials=None):
         counter.update(tokens)
 
     stoi = {}
-    # add special tokens first
     for sp in specials:
         if sp not in stoi:
             stoi[sp] = len(stoi)
 
-    # add normal tokens above frequency threshold
     for tok, freq in counter.items():
         if freq >= min_freq and tok not in stoi:
             stoi[tok] = len(stoi)
@@ -118,16 +108,12 @@ def text_to_indices(text, vocab):
         text = ""
     tokens = basic_tokenizer(text)
 
-    # ensure at least one token so LSTM never sees length 0
     if len(tokens) == 0:
         tokens = ["<UNK>"]
 
     ids = vocab["encode"](tokens)
     return torch.tensor(ids, dtype=torch.long)
 
-# ------------------------------------------------------------------
-# Dataset & DataLoaders
-# ------------------------------------------------------------------
 class TextDataset(Dataset):
     def __init__(self, df_, vocab):
         self.texts = df_["text"].tolist()
@@ -163,10 +149,6 @@ train_loader = DataLoader(
 val_loader = DataLoader(
     val_dataset, batch_size=64, shuffle=False, collate_fn=collate_fn
 )
-
-# ------------------------------------------------------------------
-# Model
-# ------------------------------------------------------------------
 class LSTMClassifier(nn.Module):
     def __init__(
         self,
@@ -228,9 +210,6 @@ model = LSTMClassifier(
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-# ------------------------------------------------------------------
-# Training loop with progress + timing
-# ------------------------------------------------------------------
 num_epochs = 10
 logger.info(f"Starting training for {num_epochs} epochs")
 
@@ -238,8 +217,6 @@ overall_start = time.time()
 
 for epoch in range(num_epochs):
     epoch_start = time.time()
-
-    # ---------- Training ----------
     model.train()
     total_loss = 0.0
     total_train_examples = 0
@@ -273,7 +250,6 @@ for epoch in range(num_epochs):
     train_top1 = topk_accuracy(y_true_train, y_scores_train, k=1)
     train_top3 = topk_accuracy(y_true_train, y_scores_train, k=3)
 
-    # ---------- Validation ----------
     model.eval()
     val_scores = []
     val_labels = []
