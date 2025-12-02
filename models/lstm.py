@@ -216,10 +216,10 @@ logger.info(f"Using device: {device}")
 
 model = LSTMClassifier(
     vocab_size=vocab_size,
-    embed_dim=128,
-    hidden_dim=128,
+    embed_dim=256,
+    hidden_dim=256,
     num_classes=num_classes,
-    num_layers=1,
+    num_layers=2,
     bidirectional=True,
     dropout=0.5,
     pad_idx=pad_idx,
@@ -231,7 +231,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 # ------------------------------------------------------------------
 # Training loop with progress + timing
 # ------------------------------------------------------------------
-num_epochs = 20
+num_epochs = 10
 logger.info(f"Starting training for {num_epochs} epochs")
 
 overall_start = time.time()
