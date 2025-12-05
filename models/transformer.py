@@ -263,7 +263,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 # ------------------------------------------------------------------
 # Training loop
 # ------------------------------------------------------------------
-num_epochs = 10
+num_epochs = 20
 logger.info(f"Starting training for {num_epochs} epochs")
 
 overall_start = time.time()
