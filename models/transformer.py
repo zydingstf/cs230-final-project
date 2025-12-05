@@ -261,9 +261,9 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 # ------------------------------------------------------------------
-# Training loop (unchanged)
+# Training loop
 # ------------------------------------------------------------------
-num_epochs = 20
+num_epochs = 10
 logger.info(f"Starting training for {num_epochs} epochs")
 
 overall_start = time.time()
