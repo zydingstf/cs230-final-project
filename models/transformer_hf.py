@@ -12,9 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# ------------------------------------------------------------------
-# Logging setup
-# ------------------------------------------------------------------
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -33,9 +31,7 @@ from src.evaluation_metrics import topk_accuracy
 
 from transformers import AutoTokenizer, AutoModel
 
-# ------------------------------------------------------------------
-# Config
-# ------------------------------------------------------------------
+# Model config
 MODEL_NAME = "distilbert-base-uncased"
 MAX_LEN = 128
 BATCH_SIZE_TRAIN = 32
@@ -54,9 +50,7 @@ BEST_CHECKPOINT_PATH = os.path.join(
 )
 
 
-# ------------------------------------------------------------------
 # Data loading
-# ------------------------------------------------------------------
 logger.info("Loading data from data/cleaned.csv")
 df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", "cleaned.csv"))
 df = df[["text", "label_id"]]
@@ -74,15 +68,11 @@ logger.info(f"Train size: {len(train_df)}, Val size: {len(val_df)}")
 num_classes = df["label_id"].nunique()
 logger.info(f"Num classes: {num_classes}")
 
-# ------------------------------------------------------------------
 # Tokenizer
-# ------------------------------------------------------------------
 logger.info(f"Loading tokenizer: {MODEL_NAME}")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
-# ------------------------------------------------------------------
-# Dataset & DataLoaders
-# ------------------------------------------------------------------
+# Dataset
 class TextDataset(Dataset):
     def __init__(self, df_):
         self.texts = df_["text"].tolist()
@@ -131,9 +121,7 @@ val_loader = DataLoader(
     collate_fn=collate_fn,
 )
 
-# ------------------------------------------------------------------
-# Model: Pretrained Transformer + Classification Head
-# ------------------------------------------------------------------
+# Model
 class HFEmojiClassifier(nn.Module):
     def __init__(self, model_name: str, num_classes: int, dropout: float = 0.1):
         super().__init__()
@@ -160,9 +148,7 @@ class HFEmojiClassifier(nn.Module):
         logits = self.classifier(cls_rep)
         return logits
 
-# ------------------------------------------------------------------
 # Training setup
-# ------------------------------------------------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
 
@@ -197,9 +183,7 @@ if os.path.exists(BEST_CHECKPOINT_PATH):
     )
 
 
-# ------------------------------------------------------------------
 # Training loop
-# ------------------------------------------------------------------
 logger.info(f"Starting training for {NUM_EPOCHS} epochs")
 
 overall_start = time.time()
@@ -208,7 +192,6 @@ global_step = 0
 for epoch in range(start_epoch, NUM_EPOCHS):
     epoch_start = time.time()
 
-    # ---------- Training ----------
     model.train()
     total_loss = 0.0
     total_train_examples = 0
@@ -245,7 +228,7 @@ for epoch in range(start_epoch, NUM_EPOCHS):
     train_top1 = topk_accuracy(y_true_train, y_scores_train, k=1)
     train_top3 = topk_accuracy(y_true_train, y_scores_train, k=3)
 
-    # ---------- Validation ----------
+    # Validatiaon
     model.eval()
     val_scores = []
     val_labels = []

@@ -2,20 +2,15 @@ import os
 import sys
 import time
 import logging
-
-# Progress bar
 from tqdm.auto import tqdm
 
-# Path of this file: project_root/models/lstm.py
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))  # go up to project_root
 
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# ------------------------------------------------------------------
-# Logging setup
-# ------------------------------------------------------------------
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",

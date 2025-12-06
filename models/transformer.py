@@ -13,9 +13,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# ------------------------------------------------------------------
-# Logging setup
-# ------------------------------------------------------------------
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -35,9 +33,7 @@ from src.evaluation_metrics import topk_accuracy
 import re
 from collections import Counter
 
-# ------------------------------------------------------------------
 # Data loading
-# ------------------------------------------------------------------
 logger.info("Loading data from data/cleaned.csv")
 df = pd.read_csv(os.path.join(PROJECT_ROOT, "data", "cleaned.csv"))
 df = df[["text", "label_id"]]
@@ -49,9 +45,7 @@ train_df, val_df = train_test_split(
 
 logger.info(f"Train size: {len(train_df)}, Val size: {len(val_df)}")
 
-# ------------------------------------------------------------------
-# Tokenizer & vocab
-# ------------------------------------------------------------------
+# Tokenizer
 TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9']+|[.,!?;]")
 
 def basic_tokenizer(text: str):
@@ -113,9 +107,7 @@ def text_to_indices(text, vocab):
     ids = vocab["encode"](tokens)
     return torch.tensor(ids, dtype=torch.long)
 
-# ------------------------------------------------------------------
-# Dataset & loaders
-# ------------------------------------------------------------------
+# Dataloader
 class TextDataset(Dataset):
     def __init__(self, df_, vocab):
         self.texts = df_["text"].tolist()
@@ -152,9 +144,7 @@ val_loader = DataLoader(
     val_dataset, batch_size=64, shuffle=False, collate_fn=collate_fn
 )
 
-# ------------------------------------------------------------------
-# Transformer model
-# ------------------------------------------------------------------
+# Transformer
 class PositionalEncoding(nn.Module):
     """
     Standard sinusoidal positional encoding.
@@ -239,9 +229,7 @@ class TransformerClassifier(nn.Module):
         logits = self.fc(pooled)
         return logits
 
-# ------------------------------------------------------------------
 # Training setup
-# ------------------------------------------------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
 
@@ -260,9 +248,7 @@ model = TransformerClassifier(
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-# ------------------------------------------------------------------
 # Training loop
-# ------------------------------------------------------------------
 num_epochs = 20
 logger.info(f"Starting training for {num_epochs} epochs")
 
@@ -271,7 +257,7 @@ overall_start = time.time()
 for epoch in range(num_epochs):
     epoch_start = time.time()
 
-    # ---------- Training ----------
+    # Training 
     model.train()
     total_loss = 0.0
     total_train_examples = 0
@@ -304,7 +290,7 @@ for epoch in range(num_epochs):
     train_top1 = topk_accuracy(y_true_train, y_scores_train, k=1)
     train_top3 = topk_accuracy(y_true_train, y_scores_train, k=3)
 
-    # ---------- Validation ----------
+    # Validation
     model.eval()
     val_scores = []
     val_labels = []
