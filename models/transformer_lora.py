@@ -103,7 +103,7 @@ def collate_fn(batch):
     return encoded, labels
 
 train_dataset = TextDataset(train_df)
-val_dataset   = TextDataset(val_df)
+val_dataset = TextDataset(val_df)
 
 train_loader = DataLoader(
     train_dataset,
@@ -236,7 +236,7 @@ for epoch in range(NUM_EPOCHS):
         val_labels.append(batch_y.detach().cpu().numpy())
 
     y_scores_val = np.concatenate(val_scores, axis=0)
-    y_true_val   = np.concatenate(val_labels, axis=0)
+    y_true_val = np.concatenate(val_labels, axis=0)
     val_top1 = topk_accuracy(y_true_val, y_scores_val, k=1)
     val_top3 = topk_accuracy(y_true_val, y_scores_val, k=3)
 

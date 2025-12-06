@@ -43,6 +43,17 @@ BATCH_SIZE_VAL = 64
 LR = 2e-5
 NUM_EPOCHS = 5
 
+# Checkpoint setup
+CHECKPOINT_DIR = os.path.join(PROJECT_ROOT, "checkpoints") 
+ANALYSIS_DIR = os.path.join(PROJECT_ROOT, "analysis")
+os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+os.makedirs(ANALYSIS_DIR, exist_ok=True)
+
+BEST_CHECKPOINT_PATH = os.path.join(
+    CHECKPOINT_DIR, f"{MODEL_NAME}_best.pt"
+)
+
+
 # ------------------------------------------------------------------
 # Data loading
 # ------------------------------------------------------------------
@@ -54,6 +65,9 @@ df["text"] = df["text"].fillna("")
 train_df, val_df = train_test_split(
     df, test_size=0.2, random_state=42, stratify=df["label_id"]
 )
+
+train_df = train_df.reset_index(drop=True)
+val_df   = val_df.reset_index(drop=True)
 
 logger.info(f"Train size: {len(train_df)}, Val size: {len(val_df)}")
 
@@ -102,7 +116,7 @@ def collate_fn(batch):
     return encoded, labels
 
 train_dataset = TextDataset(train_df)
-val_dataset   = TextDataset(val_df)
+val_dataset = TextDataset(val_df)
 
 train_loader = DataLoader(
     train_dataset,
@@ -167,6 +181,22 @@ scheduler = torch.optim.lr_scheduler.LinearLR(
     optimizer, start_factor=1.0, end_factor=0.1, total_iters=total_train_steps
 )
 
+# Resume from checkpoint
+best_val_top1 = 0.0
+start_epoch = 0
+if os.path.exists(BEST_CHECKPOINT_PATH):
+    logger.info(f"Found checkpoint at {BEST_CHECKPOINT_PATH}, loading...")
+    ckpt = torch.load(BEST_CHECKPOINT_PATH, map_location=device)
+    model.load_state_dict(ckpt["model_state_dict"])
+    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+    start_epoch = ckpt["epoch"]
+    best_val_top1 = ckpt.get("val_top1", 0.0)
+    logger.info(
+        f"Resuming from epoch {start_epoch} with best_val_top1={best_val_top1:.4f}"
+    )
+
+
 # ------------------------------------------------------------------
 # Training loop
 # ------------------------------------------------------------------
@@ -175,7 +205,7 @@ logger.info(f"Starting training for {NUM_EPOCHS} epochs")
 overall_start = time.time()
 global_step = 0
 
-for epoch in range(NUM_EPOCHS):
+for epoch in range(start_epoch, NUM_EPOCHS):
     epoch_start = time.time()
 
     # ---------- Training ----------
@@ -236,7 +266,7 @@ for epoch in range(NUM_EPOCHS):
         val_labels.append(batch_y.detach().cpu().numpy())
 
     y_scores_val = np.concatenate(val_scores, axis=0)
-    y_true_val   = np.concatenate(val_labels, axis=0)
+    y_true_val = np.concatenate(val_labels, axis=0)
     val_top1 = topk_accuracy(y_true_val, y_scores_val, k=1)
     val_top3 = topk_accuracy(y_true_val, y_scores_val, k=3)
 
@@ -249,6 +279,54 @@ for epoch in range(NUM_EPOCHS):
         f"val_top1={val_top1:.4f} | val_top3={val_top3:.4f} | "
         f"epoch_time={epoch_time:.1f}s"
     )
+
+    # Save best checkpoint
+    if val_top1 > best_val_top1:
+        best_val_top1 = val_top1
+        ckpt = {
+            "epoch": epoch + 1,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "val_top1": val_top1,
+            "val_top3": val_top3,
+        }
+        torch.save(ckpt, BEST_CHECKPOINT_PATH)
+        logger.info(
+            f"New best model saved to {BEST_CHECKPOINT_PATH} (val_top1={val_top1:.4f})"
+        )
+
+    # Misclassification analysis for the final epoch
+    if epoch == NUM_EPOCHS - 1:
+        y_pred_val = y_scores_val.argmax(axis=1)
+
+        top3_idx = np.argsort(-y_scores_val, axis=1)[:, :3]
+
+        val_analysis_df = val_df.copy().reset_index(drop=True)
+        val_analysis_df["true_label"] = y_true_val
+        val_analysis_df["pred_label"] = y_pred_val
+        val_analysis_df["top3_labels"] = top3_idx.tolist()
+
+        misclassified_df = val_analysis_df[
+            val_analysis_df["true_label"] != val_analysis_df["pred_label"]
+        ]
+
+        val_preds_path = os.path.join(
+            ANALYSIS_DIR, f"val_predictions_epoch{epoch+1}.csv"
+        )
+        miscls_path = os.path.join(
+            ANALYSIS_DIR, f"val_misclassified_epoch{epoch+1}.csv"
+        )
+
+        val_analysis_df.to_csv(val_preds_path, index=False)
+        misclassified_df.to_csv(miscls_path, index=False)
+
+        logger.info(
+            f"[FINAL EPOCH] Saved validation predictions to {val_preds_path} "
+            f"and misclassified examples to {miscls_path} "
+            f"(num_misclassified={len(misclassified_df)})"
+        )
+
 
 overall_time = time.time() - overall_start
 logger.info(f"Training finished in {overall_time:.1f} seconds")
